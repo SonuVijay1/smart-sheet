@@ -153,3 +153,26 @@
   color: #fff;
   border-color: rgba(255,255,255,0.06);
 }
+
+/* AI Detect & Auto-Fill button */
+.controls button.ai-detect {
+  background: linear-gradient(180deg, #00b09b, #009688);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.06);
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.controls button.ai-detect:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0,255,200,0.25);
+}
+
+.controls button.ai-detect:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}

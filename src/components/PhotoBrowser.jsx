@@ -8,6 +8,48 @@ const app = require('photoshop').app;
 
 const imageExtRE = /\.(png|jpe?g|gif|webp|tif|tiff)$/i;
 
+async function detectFramesFromPSD() {
+  const app = require("photoshop").app;
+  const core = require("photoshop").core;
+  const fs = require("uxp").storage.localFileSystem;
+
+  try {
+    let pngFile, docWidth, docHeight;
+
+    await core.executeAsModal(async () => {
+      const doc = app.activeDocument;
+      docWidth = doc.width.value;
+      docHeight = doc.height.value;
+      const tempFolder = await fs.getTemporaryFolder();
+      pngFile = await tempFolder.createFile("frame_preview.png", { overwrite: true });
+      await doc.saveAs.png(pngFile, { quality: 10 });
+      console.log("✅ Exported PSD preview:", pngFile.nativePath);
+    }, { commandName: "Export PSD Preview" });
+
+    const arrayBuffer = await pngFile.read({ format: storage.formats.binary });
+    const blob = new Blob([arrayBuffer], { type: "image/png" });
+    const formData = new FormData();
+    formData.append("file", blob, "frame_preview.png");
+
+    console.log("🚀 Sending to FastAPI...");
+    const response = await fetch("http://127.0.0.1:8000/detect_frames", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+
+    console.log("🧠 Detected frame boxes:", data.boxes);
+    return { boxes: data.boxes || [], imageSize: data.image_size, docSize: { width: docWidth, height: docHeight } };
+
+  } catch (err) {
+    console.error("❌ detectFramesFromPSD failed:", err);
+    await showUserAlert("Failed to detect frames. Check FastAPI connection.");
+    return { boxes: [], imageSize: null, docSize: null };
+  }
+}
+
 export default function PhotoBrowser() {
   const [photos, setPhotos] = useState([]);
   const [folderName, setFolderName] = useState("");
@@ -306,6 +348,90 @@ export default function PhotoBrowser() {
     }
   }
 
+  // ====================== AUTO PLACE PHOTOS WITH AI ======================
+async function autoPlacePhotosWithAI() {
+  console.log("🧠 AI button clicked!");
+  const core = require("photoshop").core;
+
+  try {
+    const { boxes, imageSize, docSize } = await detectFramesFromPSD();
+    if (!boxes.length) {
+      await showUserAlert("No frames detected by AI.");
+      return;
+    }
+
+    const selectedItems = photos.filter((item) => selectedPhotos.has(item.name));
+    if (!selectedItems.length) {
+      await showUserAlert("No photos selected.");
+      return;
+    }
+
+    // Map coordinates from exported PNG → actual PSD size
+    const scaleX = docSize.width / imageSize.width;
+    const scaleY = docSize.height / imageSize.height;
+    console.log("📐 Mapping scale:", { scaleX, scaleY });
+
+    const count = Math.min(boxes.length, selectedItems.length);
+
+    for (let i = 0; i < count; i++) {
+      const frame = boxes[i];
+      const photo = selectedItems[i];
+
+      const scaledFrame = {
+        left: frame.x * scaleX,
+        top: frame.y * scaleY,
+        right: (frame.x + frame.w) * scaleX,
+        bottom: (frame.y + frame.h) * scaleY,
+      };
+
+      const formData = new FormData();
+      formData.append(
+        "frame_box",
+        JSON.stringify({
+          x: scaledFrame.left,
+          y: scaledFrame.top,
+          w: scaledFrame.right - scaledFrame.left,
+          h: scaledFrame.bottom - scaledFrame.top,
+        })
+      );
+
+      const arrayBuffer = await photo.file.read({
+        format: storage.formats.binary,
+      });
+      const blob = new Blob([arrayBuffer], { type: "image/jpeg" });
+      formData.append("photo", blob, photo.name);
+
+      console.log(`🧠 Sending ${photo.name} to /fit_photo`);
+      const response = await fetch("http://127.0.0.1:8000/fit_photo", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await response.json();
+
+      if (!result.target_box) {
+        console.warn("⚠️ AI did not return valid box:", result);
+        continue;
+      }
+
+      result.photoFile = photo.file;
+      console.log("📦 AI transform result:", result);
+
+      // 🧩 Run all Photoshop edits inside one modal
+      await core.executeAsModal(
+        async () => {
+          await applyTransform(result);
+        },
+        { commandName: "AI Place with Clipping Mask" }
+      );
+    }
+
+    await showUserAlert("✅ AI fitted photos into frames precisely!");
+  } catch (err) {
+    console.error("AI placement error:", err);
+    await showUserAlert("Error during AI placement: " + err.message);
+  }
+}
+
   return (
     <div className="photo-browser">
       {alertMessage && (
@@ -321,14 +447,22 @@ export default function PhotoBrowser() {
       )}
 
       <div className="controls">
-        <button onClick={pickFolder}>Choose folder</button>
-        {selectedPhotos.size > 0 && (
-          <button onClick={placeSelectedIntoFrames}>
-            Place {selectedPhotos.size} selected photos
-          </button>
-        )}
-        <div className="folder-name">{folderName}</div>
-      </div>
+  <button onClick={pickFolder}>Choose folder</button>
+
+  {/* 👇 New AI button */}
+  <button className="ai-detect" onClick={autoPlacePhotosWithAI}>
+    🧠 AI Detect & Auto-Fill
+  </button>
+
+  {selectedPhotos.size > 0 && (
+    <button onClick={placeSelectedIntoFrames}>
+      Place {selectedPhotos.size} selected photos
+    </button>
+  )}
+
+  <div className="folder-name">{folderName}</div>
+</div>
+
 
       <div className="thumbnails">
         {photos.length === 0 ? (
@@ -386,3 +520,87 @@ async function showUserAlert(message, title = "Notice") {
     console.warn("showUserAlert failed", err);
   }
 }
+
+// ====================== APPLY TRANSFORM ======================
+async function applyTransform(result) {
+  const { batchPlay } = require("photoshop").action;
+  const app = require("photoshop").app;
+  const storage = require("uxp").storage;
+
+  try {
+    if (!result || !result.target_box) {
+      console.error("⚠️ Invalid AI result:", result);
+      return;
+    }
+
+    const { left, top, right, bottom } = result.target_box;
+    const photoFile = result.photoFile;
+    if (!photoFile) {
+      console.error("⚠️ Missing photo file reference");
+      return;
+    }
+
+    // Create session token for photo
+    const token = await storage.localFileSystem.createSessionToken(photoFile);
+
+    // Step 1️⃣ Place image
+    await batchPlay(
+      [
+        {
+          _obj: "placeEvent",
+          null: { _path: token, _kind: "local" },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      { synchronousExecution: true }
+    );
+
+    // Step 2️⃣ Transform image to fit frame
+    const width = right - left;
+    const height = bottom - top;
+    await batchPlay(
+      [
+        {
+          _obj: "transform",
+          _isCommand: true,
+          freeTransformCenterState: {
+            _enum: "quadCenterState",
+            _value: "QCSCorner0",
+          },
+          offset: {
+            _obj: "offset",
+            horizontal: { _unit: "pixelsUnit", _value: left },
+            vertical: { _unit: "pixelsUnit", _value: top },
+          },
+          width: { _unit: "pixelsUnit", _value: width },
+          height: { _unit: "pixelsUnit", _value: height },
+          _options: { dialogOptions: "dontDisplay" },
+        },
+      ],
+      { synchronousExecution: true }
+    );
+
+    console.log("📏 Transformed photo:", { left, top, width, height });
+
+    // Step 3️⃣ Clip image to frame below
+    try {
+      await batchPlay(
+        [
+          {
+            _obj: "createClippingMask",
+            _options: { dialogOptions: "dontDisplay" },
+          },
+        ],
+        { synchronousExecution: true }
+      );
+      console.log("✅ Clipping mask applied");
+    } catch (clipErr) {
+      console.warn("⚠️ Could not create clipping mask:", clipErr);
+    }
+
+    console.log("✅ Photo fitted inside frame successfully");
+  } catch (err) {
+    console.error("❌ applyTransform failed:", err);
+  }
+}
+
