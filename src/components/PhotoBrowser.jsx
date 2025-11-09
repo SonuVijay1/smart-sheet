@@ -155,11 +155,8 @@ export default function PhotoBrowser() {
     if (selectedLayers.length === 0) throw new Error("No frames selected");
     if (selectedItems.length === 0) throw new Error("No photos selected");
 
-    // mismatch alert
     if (selectedItems.length > selectedLayers.length) {
-      const msg = `You selected ${selectedItems.length} images but only ${selectedLayers.length} frame` +
-                  `${selectedLayers.length === 1 ? "" : "s"}.\n\n` +
-                  `Select up to ${selectedLayers.length} image${selectedLayers.length === 1 ? "" : "s"}.`;
+      const msg = `You selected ${selectedItems.length} images but only ${selectedLayers.length} frame${selectedLayers.length === 1 ? "" : "s"}.\n\nSelect up to ${selectedLayers.length} image${selectedLayers.length === 1 ? "" : "s"}.`;
       setAlertTitle("Selection mismatch");
       setAlertMessage(msg);
       return;
@@ -178,13 +175,16 @@ export default function PhotoBrowser() {
         const token = await storage.localFileSystem.createSessionToken(item.file);
         app.activeDocument.activeLayers = [frameLayer];
 
-        // 1️⃣ Place image and convert to Smart Object
+        // 1️⃣ Place and convert to Smart Object
         await batchPlay([
           { _obj: "placeEvent", null: { _kind: "local", _path: token }, _isCommand: true },
           { _obj: "placedLayerConvertToSmartObject", _isCommand: true }
         ], { synchronousExecution: true });
 
-        // 2️⃣ Get placed layer + bounds
+        // 2️⃣ Commit placement
+        await batchPlay([{ _obj: "commit", _isCommand: true }], { synchronousExecution: true });
+
+        // 3️⃣ Get placed + frame bounds
         let placedLayer = app.activeDocument.activeLayers[0];
         const fb = frameLayer.bounds;
         const pb = placedLayer.bounds;
@@ -203,66 +203,52 @@ export default function PhotoBrowser() {
         const placedW = placedRight - placedLeft;
         const placedH = placedBottom - placedTop;
 
-        // 3️⃣ Scale (contain mode)
+        // 4️⃣ Contain scale
         const scaleFactor = Math.min(frameW / placedW, frameH / placedH);
         const scalePercent = scaleFactor * 100;
 
-        console.log("before scale:", { frameW, frameH, placedW, placedH, scaleFactor, scalePercent });
+        console.log("before scale:", { frameW, frameH, placedW, placedH, scaleFactor });
+
+        // 5️⃣ Scale and center
+        const frameCenterX = frameLeft + frameW / 2;
+        const frameCenterY = frameTop + frameH / 2;
+        const placedCenterX = placedLeft + placedW / 2;
+        const placedCenterY = placedTop + placedH / 2;
+        const dx = frameCenterX - placedCenterX;
+        const dy = frameCenterY - placedCenterY;
 
         await batchPlay([
           {
             _obj: "transform",
             _isCommand: true,
+            freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
             scaleHorizontal: { _unit: "percentUnit", _value: scalePercent },
             scaleVertical: { _unit: "percentUnit", _value: scalePercent },
-            freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" }
+            offset: {
+              _obj: "offset",
+              horizontal: { _unit: "pixelsUnit", _value: dx },
+              vertical: { _unit: "pixelsUnit", _value: dy }
+            },
+            linked: true
           }
         ], { synchronousExecution: true });
 
-        // 4️⃣ Re-read bounds after scale
-        placedLayer = app.activeDocument.activeLayers[0];
-        const pb2 = placedLayer.bounds;
-        const pL = Number(pb2.left.value || pb2.left);
-        const pT = Number(pb2.top.value || pb2.top);
-        const pR = Number(pb2.right.value || pb2.right);
-        const pB = Number(pb2.bottom.value || pb2.bottom);
-        const pW = pR - pL;
-        const pH = pB - pT;
-
-        const frameCenterX = frameLeft + frameW / 2;
-        const frameCenterY = frameTop + frameH / 2;
-        const placedCenterX = pL + pW / 2;
-        const placedCenterY = pT + pH / 2;
-
-        const dx = frameCenterX - placedCenterX;
-        const dy = frameCenterY - placedCenterY;
-
-        console.log("after scale bounds:", { pL, pT, pR, pB, pW, pH, dx, dy });
-
-        // 5️⃣ Move image relative to its current position
+        // 6️⃣ Move placed layer above frame layer
         await batchPlay([
           {
             _obj: "move",
             _isCommand: true,
             _target: [{ _ref: "layer", _id: placedLayer.id }],
-            to: {
-              _obj: "offset",
-              horizontal: { _unit: "pixelsUnit", _value: dx },
-              vertical: { _unit: "pixelsUnit", _value: dy }
-            },
-            relative: true
+            to: { _ref: "layer", _id: frameLayer.id },
+            adjustment: true // ensures "above" placement
           }
         ], { synchronousExecution: true });
 
-        // 6️⃣ Clip inside frame
-        try {
-          app.activeDocument.activeLayers = [placedLayer];
-          await batchPlay([{ _obj: "createClippingMask", _isCommand: true }], { synchronousExecution: true });
-        } catch (clipErr) {
-          console.warn("createClippingMask failed:", clipErr);
-        }
+        // 7️⃣ Clip inside frame
+        app.activeDocument.activeLayers = [placedLayer];
+        await batchPlay([{ _obj: "createClippingMask", _isCommand: true }], { synchronousExecution: true });
 
-        console.log(`placed [${i}] done`);
+        console.log(`✅ placed [${i}] done`);
       }
     }, { commandName: "Place Multiple Into Frames" });
 
