@@ -148,163 +148,130 @@ export default function PhotoBrowser() {
   }
 
   async function placeSelectedIntoFrames() {
-    try {
-      const selectedLayers = app.activeDocument.activeLayers;
-      const selectedItems = photos.filter((item) => selectedPhotos.has(item.name));
+  try {
+    const selectedLayers = app.activeDocument.activeLayers;
+    const selectedItems = photos.filter((item) => selectedPhotos.has(item.name));
 
-      if (selectedLayers.length === 0) {
-        throw new Error("No frames selected");
-      }
-      if (selectedItems.length === 0) {
-        throw new Error("No photos selected");
-      }
+    if (selectedLayers.length === 0) throw new Error("No frames selected");
+    if (selectedItems.length === 0) throw new Error("No photos selected");
 
-      // NEW: Inform user when more images are selected than frames
-      if (selectedItems.length > selectedLayers.length) {
-        const msg = `You selected ${selectedItems.length} images but only ${selectedLayers.length} frame` +
-                    `${selectedLayers.length === 1 ? "" : "s"} is/are selected.\n\n` +
-                    `Please select at most ${selectedLayers.length} image` +
-                    `${selectedLayers.length === 1 ? "" : "s"} or select more frames, then try again.`;
-        // show in-panel modal and return
-        setAlertTitle("Selection mismatch");
-        setAlertMessage(msg);
-         return; // stop processing until user corrects selection
-      }
-
-      // only place up to the number of frames to avoid overlap
-      const count = Math.min(selectedLayers.length, selectedItems.length);
-      if (selectedItems.length > selectedLayers.length) {
-        console.warn(`More photos selected (${selectedItems.length}) than frames (${selectedLayers.length}). Only first ${count} photos will be placed.`);
-      }
-
-      console.log("placeSelectedIntoFrames START", { layers: selectedLayers.length, photos: selectedItems.length, using: count });
-
-      await require("photoshop").core.executeAsModal(
-        async () => {
-          try {
-            for (let i = 0; i < count; i++) {
-              const frameLayer = selectedLayers[i];
-              const item = selectedItems[i];
-              console.log(`placing [${i}] photo="${item.name}" -> layerId=${frameLayer.id}`);
-
-              const token = await storage.localFileSystem.createSessionToken(item.file);
-              console.log("session token created");
-
-              // select the frame layer via DOM
-              try {
-                app.activeDocument.activeLayers = [frameLayer];
-                console.log("frame layer selected via DOM", frameLayer.id);
-              } catch (selErr) {
-                console.warn("DOM layer select failed, continuing", selErr);
-              }
-
-              // place image and convert to smart object
-              await batchPlay(
-                [
-                  { _obj: "placeEvent", null: { _kind: "local", _path: token }, _isCommand: true },
-                  { _obj: "placedLayerConvertToSmartObject", _isCommand: true }
-                ],
-                { synchronousExecution: true }
-              );
-
-              // now the placed layer is the active layer
-              const placedLayer = app.activeDocument.activeLayers[0];
-              console.log("placed layer:", placedLayer.id);
-
-              // get frame bounds and placed layer bounds (use UnitValue .value)
-              const fb = frameLayer.bounds;
-              const pb = placedLayer.bounds;
-              const frameLeft = Number(fb.left.value || fb.left);
-              const frameTop = Number(fb.top.value || fb.top);
-              const frameRight = Number(fb.right.value || fb.right);
-              const frameBottom = Number(fb.bottom.value || fb.bottom);
-              const frameW = frameRight - frameLeft;
-              const frameH = frameBottom - frameTop;
-
-              const placedLeft = Number(pb.left.value || pb.left);
-              const placedTop = Number(pb.top.value || pb.top);
-              const placedRight = Number(pb.right.value || pb.right);
-              const placedBottom = Number(pb.bottom.value || pb.bottom);
-              const placedW = placedRight - placedLeft;
-              const placedH = placedBottom - placedTop;
-
-              // compute scale percent to COVER the frame while preserving aspect ratio
-              const scaleFactor = Math.max(frameW / placedW, frameH / placedH);
-              const scalePercent = Math.round(scaleFactor * 100);
-
-              console.log({ frameW, frameH, placedW, placedH, scaleFactor, scalePercent });
-
-              // scale the placed layer via batchPlay (avoid placedLayer.resize which is not available)
-              try {
-                await batchPlay(
-                  [
-                    {
-                      _obj: "transform",
-                      _isCommand: true,
-                      // explicit horizontal + vertical percent -> reliable scaling
-                      scaleHorizontal: { _unit: "percentUnit", _value: scalePercent },
-                      scaleVertical: { _unit: "percentUnit", _value: scalePercent },
-                      freeTransformCenterState: { _ref: "null" }
-                    }
-                  ],
-                  { synchronousExecution: true }
-                );
-              } catch (scaleErr) {
-                console.warn("batchPlay scale failed:", scaleErr);
-              }
-
-              // center placed layer over the frame using batchPlay transform offset
-              try {
-                const newPb = app.activeDocument.activeLayers[0].bounds;
-                const newPlacedLeft = Number(newPb.left.value || newPb.left);
-                const newPlacedTop = Number(newPb.top.value || newPb.top);
-                const newPlacedRight = Number(newPb.right.value || newPb.right);
-                const newPlacedBottom = Number(newPb.bottom.value || newPb.bottom);
-                const newPlacedW = newPlacedRight - newPlacedLeft;
-                const newPlacedH = newPlacedBottom - newPlacedTop;
-
-                const dx = frameLeft + frameW / 2 - (newPlacedLeft + newPlacedW / 2);
-                const dy = frameTop + frameH / 2 - (newPlacedTop + newPlacedH / 2);
-
-                await batchPlay(
-                  [
-                    {
-                      _obj: "transform",
-                      _isCommand: true,
-                      offset: { _obj: "offset", horizontal: dx, vertical: dy }
-                    }
-                  ],
-                  { synchronousExecution: true }
-                );
-              } catch (centerErr) {
-                console.warn("centering placed layer failed:", centerErr);
-              }
-
-              // make clipped to the frame (frame must be above the placed layer for clipping behavior)
-              try {
-                // ensure frame layer is the clipping parent: select placed layer then create clipping mask
-                app.activeDocument.activeLayers = [placedLayer];
-                await batchPlay([{ _obj: "createClippingMask", _isCommand: true }], { synchronousExecution: true });
-              } catch (clipErr) {
-                console.warn("createClippingMask failed:", clipErr);
-              }
-
-              console.log(`placed [${i}] done`);
-            }
-          } catch (innerErr) {
-            console.error("Error inside modal:", innerErr);
-            throw innerErr;
-          }
-        },
-        { commandName: "Place Multiple Into Frames" }
-      );
-
-      console.log("placeSelectedIntoFrames COMPLETE");
-      setSelectedPhotos(new Set());
-    } catch (err) {
-      console.error("Batch place error:", err);
+    // mismatch alert
+    if (selectedItems.length > selectedLayers.length) {
+      const msg = `You selected ${selectedItems.length} images but only ${selectedLayers.length} frame` +
+                  `${selectedLayers.length === 1 ? "" : "s"}.\n\n` +
+                  `Select up to ${selectedLayers.length} image${selectedLayers.length === 1 ? "" : "s"}.`;
+      setAlertTitle("Selection mismatch");
+      setAlertMessage(msg);
+      return;
     }
+
+    const count = Math.min(selectedLayers.length, selectedItems.length);
+
+    console.log("placeSelectedIntoFrames START", { layers: selectedLayers.length, photos: selectedItems.length, using: count });
+
+    await require("photoshop").core.executeAsModal(async () => {
+      for (let i = 0; i < count; i++) {
+        const frameLayer = selectedLayers[i];
+        const item = selectedItems[i];
+        console.log(`Placing [${i}] photo="${item.name}" -> layerId=${frameLayer.id}`);
+
+        const token = await storage.localFileSystem.createSessionToken(item.file);
+        app.activeDocument.activeLayers = [frameLayer];
+
+        // 1️⃣ Place image and convert to Smart Object
+        await batchPlay([
+          { _obj: "placeEvent", null: { _kind: "local", _path: token }, _isCommand: true },
+          { _obj: "placedLayerConvertToSmartObject", _isCommand: true }
+        ], { synchronousExecution: true });
+
+        // 2️⃣ Get placed layer + bounds
+        let placedLayer = app.activeDocument.activeLayers[0];
+        const fb = frameLayer.bounds;
+        const pb = placedLayer.bounds;
+
+        const frameLeft = Number(fb.left.value || fb.left);
+        const frameTop = Number(fb.top.value || fb.top);
+        const frameRight = Number(fb.right.value || fb.right);
+        const frameBottom = Number(fb.bottom.value || fb.bottom);
+        const frameW = frameRight - frameLeft;
+        const frameH = frameBottom - frameTop;
+
+        const placedLeft = Number(pb.left.value || pb.left);
+        const placedTop = Number(pb.top.value || pb.top);
+        const placedRight = Number(pb.right.value || pb.right);
+        const placedBottom = Number(pb.bottom.value || pb.bottom);
+        const placedW = placedRight - placedLeft;
+        const placedH = placedBottom - placedTop;
+
+        // 3️⃣ Scale (contain mode)
+        const scaleFactor = Math.min(frameW / placedW, frameH / placedH);
+        const scalePercent = scaleFactor * 100;
+
+        console.log("before scale:", { frameW, frameH, placedW, placedH, scaleFactor, scalePercent });
+
+        await batchPlay([
+          {
+            _obj: "transform",
+            _isCommand: true,
+            scaleHorizontal: { _unit: "percentUnit", _value: scalePercent },
+            scaleVertical: { _unit: "percentUnit", _value: scalePercent },
+            freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" }
+          }
+        ], { synchronousExecution: true });
+
+        // 4️⃣ Re-read bounds after scale
+        placedLayer = app.activeDocument.activeLayers[0];
+        const pb2 = placedLayer.bounds;
+        const pL = Number(pb2.left.value || pb2.left);
+        const pT = Number(pb2.top.value || pb2.top);
+        const pR = Number(pb2.right.value || pb2.right);
+        const pB = Number(pb2.bottom.value || pb2.bottom);
+        const pW = pR - pL;
+        const pH = pB - pT;
+
+        const frameCenterX = frameLeft + frameW / 2;
+        const frameCenterY = frameTop + frameH / 2;
+        const placedCenterX = pL + pW / 2;
+        const placedCenterY = pT + pH / 2;
+
+        const dx = frameCenterX - placedCenterX;
+        const dy = frameCenterY - placedCenterY;
+
+        console.log("after scale bounds:", { pL, pT, pR, pB, pW, pH, dx, dy });
+
+        // 5️⃣ Move image relative to its current position
+        await batchPlay([
+          {
+            _obj: "move",
+            _isCommand: true,
+            _target: [{ _ref: "layer", _id: placedLayer.id }],
+            to: {
+              _obj: "offset",
+              horizontal: { _unit: "pixelsUnit", _value: dx },
+              vertical: { _unit: "pixelsUnit", _value: dy }
+            },
+            relative: true
+          }
+        ], { synchronousExecution: true });
+
+        // 6️⃣ Clip inside frame
+        try {
+          app.activeDocument.activeLayers = [placedLayer];
+          await batchPlay([{ _obj: "createClippingMask", _isCommand: true }], { synchronousExecution: true });
+        } catch (clipErr) {
+          console.warn("createClippingMask failed:", clipErr);
+        }
+
+        console.log(`placed [${i}] done`);
+      }
+    }, { commandName: "Place Multiple Into Frames" });
+
+    console.log("placeSelectedIntoFrames COMPLETE");
+    setSelectedPhotos(new Set());
+  } catch (err) {
+    console.error("Batch place error:", err);
   }
+}
 
   return (
     <div className="photo-browser">
