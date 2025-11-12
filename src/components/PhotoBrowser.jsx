@@ -229,73 +229,71 @@ export default function PhotoBrowser() {
   // MAIN: placeSelectedIntoFrames()
   // ------------------------------
   async function placeSelectedIntoFrames() {
-  try {
-    const selectedLayers = app.activeDocument.activeLayers;
-    const selectedItems = photos.filter((p) => selectedPhotos.has(p.name));
+    try {
+        const selectedLayers = app.activeDocument.activeLayers;
+        const selectedItems = photos.filter((p) => selectedPhotos.has(p.name));
 
-    if (!selectedLayers || selectedLayers.length === 0)
-      throw new Error("No frames selected");
-    if (!selectedItems || selectedItems.length === 0)
-      throw new Error("No photos selected");
+        if (!selectedLayers || selectedLayers.length === 0)
+            throw new Error("No frames selected");
+        if (!selectedItems || selectedItems.length === 0)
+            throw new Error("No photos selected");
 
-    const count = Math.min(selectedLayers.length, selectedItems.length);
-    console.log("placeSelectedIntoFrames START", {
-      layers: selectedLayers.length,
-      photos: selectedItems.length,
-      using: count,
-    });
+        const count = Math.min(selectedLayers.length, selectedItems.length);
+        console.log("placeSelectedIntoFrames START", {
+            layers: selectedLayers.length,
+            photos: selectedItems.length,
+            using: count,
+        });
 
-    await require("photoshop").core.executeAsModal(async () => {
-      for (let i = 0; i < count; i++) {
-        const frame = selectedLayers[i];
-        const item = selectedItems[i];
-        const token = await storage.localFileSystem.createSessionToken(item.file);
+        await require("photoshop").core.executeAsModal(async () => {
+            for (let i = 0; i < count; i++) {
+                const frame = selectedLayers[i];
+                const item = selectedItems[i];
+                const token = await storage.localFileSystem.createSessionToken(item.file);
 
-        console.log(`\n=== placing [${i}] ${item.name} into ${frame.name} ===`);
+                console.log(`\n=== placing [${i}] ${item.name} into ${frame.name} ===`);
 
-        // 1️⃣ Place photo as Smart Object
-        await batchPlay([
-          { _obj: "placeEvent", null: { _kind: "local", _path: token }, _isCommand: true },
-          { _obj: "placedLayerConvertToSmartObject", _isCommand: true },
-          { _obj: "commit", _isCommand: true }
-        ], { synchronousExecution: true });
-
-        let placed = app.activeDocument.activeLayers[0];
-
-        await resizeAlTo(frame.bounds, 'fill');
-
-        try {
-        for (let j = 0; j < app.activeDocument.activeLayers.length; j++) {
-        app.activeDocument.activeLayers[j].selected = false;
-          }
-          placed.selected = true;
-
-          await batchPlay([
-        {
-            "_obj": "groupEvent",
-            "_target": [
-                {
-                    "_enum": "ordinal",
-                    "_ref": "layer",
-                    "_value": "targetEnum"
+                for (let j = 0; j < app.activeDocument.activeLayers.length; j++) {
+                    // for(it of app.activeDocument.activeLayers) {
+                    app.activeDocument.activeLayers[j].selected = false;
                 }
-            ]
-        }
-    ]
-, { synchronousExecution: true });
+                frame.selected = true;
+                // 1️⃣ Place photo as Smart Object
+                await batchPlay([
+                    { _obj: "placeEvent", null: { _kind: "local", _path: token }, _isCommand: true },
+                    { _obj: "placedLayerConvertToSmartObject", _isCommand: true },
+                    { _obj: "commit", _isCommand: true }
+                ], { synchronousExecution: true });
 
-          console.log("Photo clipped strictly inside frame area.");
-        } catch (e) {
-          console.warn("clipping failed:", e);
-        }
-      }
-    }, { commandName: "Place & Clip inside Frame (final)" });
+                await resizeAlTo(frame.bounds, 'fill');
+                try {
+                    // Clip it to the frame
+                    await batchPlay([
+                        // Create Clipping Mask current layer
+                        {
+                            "_obj": "groupEvent",
+                            "_target": [
+                                {
+                                    "_enum": "ordinal",
+                                    "_ref": "layer",
+                                    "_value": "targetEnum"
+                                }
+                            ]
+                        }
+                    ], { synchronousExecution: true });
 
-    console.log("placeSelectedIntoFrames COMPLETE");
-    setSelectedPhotos(new Set());
-  } catch (err) {
-    console.error("Batch place error:", err);
-  }
+                    console.log("✅ Photo clipped strictly inside frame area.");
+                } catch (e) {
+                    console.warn("⚠️ clipping failed:", e);
+                }
+            }
+        }, { commandName: "Place & Clip inside Frame (final)" });
+
+        console.log("placeSelectedIntoFrames COMPLETE");
+        setSelectedPhotos(new Set());
+    } catch (err) {
+        console.error("Batch place error:", err);
+    }
 }
 
 async function resizeAlTo(mLayerB, scale) {
