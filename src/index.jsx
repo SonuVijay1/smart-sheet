@@ -4,12 +4,11 @@ import "./styles.css";
 import { PanelController } from "./controllers/PanelController.jsx";
 import { CommandController } from "./controllers/CommandController.jsx";
 import { About } from "./components/About.jsx";
-import { Demos } from "./panels/Demos.jsx";
-import { MoreDemos } from "./panels/MoreDemos.jsx";
-import PhotoBrowser from "./components/PhotoBrowser.jsx";
+import PhotoBrowser from "./components/PhotoBrowser.jsx";   // your main panel
 
 import { entrypoints } from "uxp";
 
+// ABOUT dialog
 const aboutController = new CommandController(
   ({ dialog }) => <About dialog={dialog} />,
   {
@@ -18,11 +17,13 @@ const aboutController = new CommandController(
     size: { width: 480, height: 480 },
   }
 );
-const demosController = new PanelController(() => <PhotoBrowser />, {
-  id: "demos",
+
+// MAIN PANEL — renamed from "demos" → "smartsheet"
+const smartsheetController = new PanelController(() => <PhotoBrowser />, {
+  id: "smartsheet",
   menuItems: [
     {
-      id: "reload1",
+      id: "reload",
       label: "Reload Plugin",
       enabled: true,
       checked: false,
@@ -37,33 +38,21 @@ const demosController = new PanelController(() => <PhotoBrowser />, {
     },
   ],
 });
-const moreDemosController = new PanelController(() => <MoreDemos />, {
-  id: "moreDemos",
-  menuItems: [
-    {
-      id: "reload2",
-      label: "Reload Plugin",
-      enabled: true,
-      checked: false,
-      oninvoke: () => location.reload(),
-    },
-  ],
-});
 
+// REGISTER ONLY ONE PANEL
 entrypoints.setup({
   plugin: {
     create(plugin) {
-      /*optional */ console.log("created", plugin);
+      console.log("created", plugin);
     },
     destroy() {
-      /*optional */ console.log("destroyed");
+      console.log("destroyed");
     },
   },
   commands: {
     showAbout: aboutController,
   },
   panels: {
-    demos: demosController,
-    moreDemos: moreDemosController,
+    smartsheet: smartsheetController, // only this panel now
   },
 });

@@ -1,34 +1,44 @@
+/* /mnt/data/PhotoBrowser.css
+   Final CSS for PhotoBrowser (tabs, thumbnails, minimal slider)
+*/
+
 :root{
-  --bg:#1f1f1f;           /* panel background */
-  --panel:#242424;        /* card / thumb background */
-  --muted:#9aa0a6;        /* secondary text */
-  --text:#e6e6e6;         /* primary text */
-  --border:#333538;       /* subtle borders */
-  --accent:#0a84ff;       /* action / selected color (mac system blue) */
+  --bg:#1f1f1f;
+  --panel:#242424;
+  --muted:#9aa0a6;
+  --text:#e6e6e6;
+  --border:#333538;
+  --accent:#0a84ff;
   --accent-weak:rgba(10,132,255,0.12);
-  --meta-bg:rgba(0,0,0,0.55);
   --alert-bg:#2b2b2b;
   --alert-shadow: rgba(0,0,0,0.6);
 }
 
 .photo-browser {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
-  background: var(--bg);
-  color: var(--text);
-  padding: 8px;
-  box-sizing: border-box;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: var(--bg);
+    color: var(--text);
+    padding: 8px;
+    box-sizing: border-box;
+    position: relative;
+
+    /* NEW → Bridge bottom border */
+    border-bottom: 2px solid #3a3a3a;
 }
+
 
 /* Controls */
 .controls {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  position: relative;
+  padding-right: 200px;
 }
 .controls button {
   padding: 6px 12px;
@@ -39,117 +49,248 @@
   cursor: pointer;
   font-size: 13px;
 }
-.controls button:hover {
-  background: var(--panel);
-}
-.controls .primary {
-  background: linear-gradient(180deg,var(--accent),#006be6);
-  color: #fff;
-  border: 1px solid rgba(255,255,255,0.06);
-}
+.controls button:hover { background: var(--panel); }
 .folder-name { color: var(--muted); font-size: 0.9rem; }
+
+/* -------------------------
+   Tabs row (icon-only tabs)
+   ------------------------- */
+.tabs-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 2px;
+  overflow-x: auto;
+  width: 100%;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 42px;
+  height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.tab:hover {
+  background: rgba(255,255,255,0.02);
+}
+.tab-active {
+  border-color: rgba(255,255,255,0.06);
+  background: linear-gradient(180deg,var(--panel),#2a2a2a);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+}
+.tab .tab-icon { font-size: 16px; }
+.tab .tab-letter {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* the add tab */
+.tab.add-tab {
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
 
 /* Thumbnails grid */
 .thumbnails {
   flex: 1;
-  display:flex;
-  flex-wrap:wrap;
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
   overflow-y: auto;
   padding-bottom: 8px;
-}
-.thumb {
-  width: 120px;
-  position: relative;
-  aspect-ratio: 1;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--panel);
-  transition: box-shadow 120ms, transform 120ms;
-}
-.thumb:hover {
-  box-shadow: 0 6px 18px rgba(0,0,0,0.6);
-  transform: translateY(-2px);
+  padding-left: 4px;
 }
 
+/* Thumbnail container */
+.thumb {
+  /* width/height set inline via React style for tileWidth/tileHeight */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: box-shadow 120ms, transform 120ms;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #111;
+  border-radius: 4px;
+  display: block;
+}
+
+/* Selected */
 .thumb.selected {
-  border: 2px solid var(--accent);
+  border: 2px solid var(--accent) !important;
   background: linear-gradient(180deg,var(--accent-weak),transparent);
   box-shadow: 0 8px 20px rgba(10,132,255,0.12);
 }
 
-.thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-/* metadata on hover */
-.thumb .meta {
-  width: 100%;
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--meta-bg);
-  padding: 6px;
-  opacity: 0;
-  transition: opacity 0.18s;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-}
-.thumb:hover .meta { opacity: 1; }
-.name {
-  font-size: 12px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* empty state */
+/* Empty */
 .empty { color: var(--muted); padding: 12px; }
 
-/* in-panel alert modal (Photoshop-like dark) */
+/* Alerts */
 .uxp-alert-backdrop {
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(0,0,0,0.45);
+  z-index:9999;
+}
+.uxp-alert {
+  background:var(--alert-bg);
+  color:var(--text);
+  padding:16px;
+  border-radius:8px;
+  width:min(480px,92%);
+  box-shadow:0 12px 36px var(--alert-shadow);
+}
+.uxp-alert h3 { margin:0 0 8px 0; font-size:14px; }
+.uxp-alert-message { white-space:pre-wrap; color:var(--muted); margin:0 0 12px 0; font-size:13px; }
+.uxp-alert-actions { text-align:right; }
+.uxp-alert-actions button { padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text); cursor:pointer; }
+
+/* --------------------------------------
+   REAL ADOBE BRIDGE STYLE SLIDER
+--------------------------------------- */
+
+.zoom-slider {
+    position: absolute;
+    top: 10px;                 /* WAS bottom: 12px */
+    right: 12px;               /* placed at top-right */
+    left: auto;                /* reset left */
+    transform: none;           /* remove centering transform */
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 9999;
+
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    pointer-events: auto;
+}
+
+
+
+/* - and + buttons (Bridge UI) */
+.zoom-btn {
+  background: none;
+  border: none;
+  color: #dcdcdc; /* Bridge icon color */
+  font-size: 20px;
+  font-weight: 300;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 20px;
+  text-align: center;
+  opacity: 0.8;
+}
+.zoom-btn:hover {
+  opacity: 1;
+}
+
+/* Range input (Bridge) */
+.zoom-range {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  width: calc(35%);  /* responsive percentage of panel width */
+  max-width: 260px;  /* don't exceed Bridge size */
+  min-width: 100px;
+  height: 3px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Track (Bridge gray line) */
+.zoom-range::-webkit-slider-runnable-track {
+  height: 3px;
+  background: #818181; /* Bridge exact gray */
+  border-radius: 2px;
+}
+
+/* Thumb (Bridge white circle with dark outline) */
+.zoom-range::-webkit-slider-thumb {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background: #ffffff;
+  border: 2px solid #3a3a3a; /* Bridge outline */
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  margin-top: -6px;
+}
+
+/* Firefox track */
+.zoom-range::-moz-range-track {
+  height: 3px;
+  background: #818181;
+}
+/* Firefox thumb */
+.zoom-range::-moz-range-thumb {
+  background: #ffffff;
+  border: 2px solid #3a3a3a;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
+
+/* Firefox fallback */
+.zoom-range::-moz-range-track { background: #ffffff; height: 4px; border-radius: 2px; }
+.zoom-range::-moz-range-thumb { background: #ffffff; height: 16px; width: 16px; border-radius: 50%; border: none; }
+
+/* Small responsive tweak for narrow panels */
+@media (max-width: 420px) {
+  .zoom-range { width: 200px; }
+  .tab { min-width: 36px; height: 30px; }
+}
+
+/* ============================
+   USED PHOTO CHECKMARK BADGE
+   Bottom-right corner
+============================ */
+
+/* Checkmark badge for used photos */
+.thumb.used::after {
+  content: "✓";
   position: absolute;
-  inset: 0;
+  bottom: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #111;
+  border-radius: 50%;
+  font-weight: bold;
+  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.45);
-  z-index: 9999;
+  pointer-events: none; /* DOES NOT block clicking */
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
 }
-.uxp-alert {
-  background: var(--alert-bg);
-  color: var(--text);
-  padding: 16px;
-  border-radius: 8px;
-  width: min(480px, 92%);
-  box-shadow: 0 12px 36px var(--alert-shadow);
-  border: 1px solid rgba(255,255,255,0.03);
-}
-.uxp-alert h3 { margin: 0 0 8px 0; font-size: 14px; color: var(--text); }
-.uxp-alert-message { white-space: pre-wrap; color: var(--muted); margin: 0 0 12px 0; font-size: 13px; }
-.uxp-alert-actions { text-align: right; }
-.uxp-alert-actions button {
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-}
-.uxp-alert-actions button.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: rgba(255,255,255,0.06);
+
+/* Optional: subtle fade effect for used photos */
+.thumb.used img {
+  opacity: 0.85;
 }
