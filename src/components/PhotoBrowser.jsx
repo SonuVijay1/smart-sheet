@@ -53,7 +53,7 @@ export default function PhotoBrowser() {
   // ---------------------------
   // Helpers: load images from folder
   // ---------------------------
-  async function loadImagesFromFolder(folderEntry) {
+  async function loadImagesFromFolder(folderEntry, oldMap = {}) {
   const entries = await folderEntry.getEntries();
   const imageEntries = entries.filter(e => /\.(jpg|jpeg|png)$/i.test(e.name));
 
@@ -62,18 +62,21 @@ export default function PhotoBrowser() {
   for (let entry of imageEntries) {
     const key = folderEntry.nativePath + "/" + entry.name;
 
+    let old = oldMap[entry.name] || {};
+
     // Reuse cached URL
     if (globalThumbnailCache[key]) {
       photos.push({
         name: entry.name,
         file: entry,
         url: globalThumbnailCache[key],
-        used: false
+        used: old.used || false,
+        layerId: old.layerId || null
       });
       continue;
     }
 
-    // Otherwise read file once
+    // Read file and cache URL
     const bin = await entry.read({ format: storage.formats.binary });
     const blob = new Blob([bin], { type: "image/jpeg" });
     const url = URL.createObjectURL(blob);
@@ -84,13 +87,14 @@ export default function PhotoBrowser() {
       name: entry.name,
       file: entry,
       url,
-      used: false
+      used: old.used || false,
+      layerId: old.layerId || null
     });
   }
 
   globalTabPhotos[folderEntry.nativePath] = photos;
   return photos;
-} 
+}
 
 
   // ---------------------------
@@ -323,6 +327,11 @@ export default function PhotoBrowser() {
               { synchronousExecution: true }
             );
 
+            // get placed layerId
+            const placedLayer = app.activeDocument.activeLayers[0];
+            photo.layerId = placedLayer.id;
+
+
             // mark used for that photo in tabs
             setTabs((prevTabs) =>
               prevTabs.map(function (t) {
@@ -331,7 +340,7 @@ export default function PhotoBrowser() {
                   ...t,
                   photos: t.photos.map(function (ph) {
                     if (ph.name === photo.name) {
-                      return { ...ph, used: true };
+                        return { ...ph, used: true, layerId: photo.layerId };
                     }
                     return ph;
                   }),
@@ -343,8 +352,11 @@ export default function PhotoBrowser() {
             const folderPath = activeTabObj.folderEntry.nativePath;
               if (globalTabPhotos[folderPath]) {
                 globalTabPhotos[folderPath] = globalTabPhotos[folderPath].map(ph =>
-                ph.name === photo.name ? { ...ph, used: true } : ph
-                );
+  ph.name === photo.name
+    ? { ...ph, used: true, layerId: photo.layerId }
+    : ph
+);
+
               }
 
 
@@ -403,13 +415,11 @@ export default function PhotoBrowser() {
   if (!tab || !tab.folderEntry) return;
 
   try {
-    // Build map of existing photos
     const oldMap = {};
     tab.photos.forEach(p => {
-      oldMap[p.name] = p;
+      oldMap[p.name] = { used: p.used, layerId: p.layerId };
     });
 
-    // Pass map into loadImagesFromFolder
     const photos = await loadImagesFromFolder(tab.folderEntry, oldMap);
 
     setTabs(prev =>
@@ -418,13 +428,11 @@ export default function PhotoBrowser() {
       )
     );
 
-    // Keep only selections that still exist
+    // Keep only photos that still exist
     setTabSelections(prev => {
       const newSet = new Set();
       const sel = prev[tabId] || new Set();
-      photos.forEach(p => {
-        if (sel.has(p.name)) newSet.add(p.name);
-      });
+      photos.forEach(p => { if (sel.has(p.name)) newSet.add(p.name); });
       return { ...prev, [tabId]: newSet };
     });
 
@@ -504,6 +512,92 @@ useEffect(() => {
     };
   }
 
+  async function syncUsedFlagsWithDocument() {
+  try {
+    const doc = app.activeDocument;
+    if (!doc) return;
+
+    // ⭐ Simply reading layer structure forces PS to update layer tree
+    const existingLayerIds = [];
+
+    function scanLayers(layerCollection) {
+      for (const layer of layerCollection) {
+        existingLayerIds.push(layer.id);
+        if (layer.layers && layer.layers.length > 0) {
+          scanLayers(layer.layers);
+        }
+      }
+    }
+
+    scanLayers(doc.layers);
+
+    // Update React state
+    setTabs(prev =>
+      prev.map(tab => {
+        const updatedPhotos = tab.photos.map(p => {
+          if (!p.used || !p.layerId) return p;
+          return {
+            ...p,
+            used: existingLayerIds.includes(p.layerId)
+          };
+        });
+        return { ...tab, photos: updatedPhotos };
+      })
+    );
+
+    // Update global cache too
+    Object.keys(globalTabPhotos).forEach(path => {
+      globalTabPhotos[path] = globalTabPhotos[path].map(p => {
+        if (!p.used || !p.layerId) return p;
+        return {
+          ...p,
+          used: existingLayerIds.includes(p.layerId)
+        };
+      });
+    });
+
+  } catch (err) {
+    console.log("syncUsedFlagsWithDocument error:", err);
+  }
+}
+
+async function forceLayerTreeRefresh() {
+  try {
+    await require("photoshop").core.executeAsModal(
+      async () => {
+        await batchPlay(
+          [
+            {
+              _obj: "select",
+              _target: [
+                { _ref: "layer", _enum: "ordinal", _value: "targetEnum" }
+              ]
+            }
+          ],
+          { synchronousExecution: true }
+        );
+      },
+      { commandName: "Refresh Layer Tree" }
+    );
+  } catch (e) {
+    console.log("layerTreeRefresh error", e);
+  }
+}
+
+
+
+useEffect(() => {
+  const id = setInterval(() => {
+    syncUsedFlagsWithDocument();
+  }, 2000); // every 2 seconds
+
+  return () => clearInterval(id);
+}, []);
+
+useEffect(() => {
+  syncUsedFlagsWithDocument();
+}, [activeTab]);
+
 
   async function handleDoubleClickPlace(photo) {
   try {
@@ -565,6 +659,9 @@ useEffect(() => {
           ],
           { synchronousExecution: true }
         );
+        const placedLayer = app.activeDocument.activeLayers[0];
+        photo.layerId = placedLayer.id;
+
       },
       { commandName: "Double-click Place Photo" }
     );
@@ -593,8 +690,10 @@ if (activeTabObj && activeTabObj.folderEntry) {
 
   if (globalTabPhotos[folderPath]) {
     globalTabPhotos[folderPath] = globalTabPhotos[folderPath].map(ph =>
-      ph.name === photo.name ? { ...ph, used: true } : ph
-    );
+  ph.name === photo.name
+    ? { ...ph, used: true, layerId: photo.layerId }
+    : ph
+);
   }
 }
 
@@ -663,28 +762,32 @@ useEffect(() => {
 
 async function refreshFolder(tabId) {
   const tab = tabs.find(t => t.id === tabId);
-  if (!tab || !tab.folderEntry) {
-    console.log("No folderEntry for tab", tab);
-    return;
-  }
+  if (!tab || !tab.folderEntry) return;
 
   try {
-    const photos = await loadImagesFromFolder(tab.folderEntry);
+    const oldMap = {};
+    tab.photos.forEach(p => {
+      oldMap[p.name] = { used: p.used, layerId: p.layerId };
+    });
+
+    const photos = await loadImagesFromFolder(tab.folderEntry, oldMap);
 
     setTabs(prev =>
-      prev.map(t => (t.id === tabId ? { ...t, photos } : t))
+      prev.map(t =>
+        t.id === tabId ? { ...t, photos } : t
+      )
     );
 
-    // Also reset selections for this tab
-    setTabSelections(prev => ({
-      ...prev,
-      [tabId]: new Set()
-    }));
+    // keep selection if photo still exists
+    setTabSelections(prev => {
+      const kept = new Set();
+      const sel = prev[tabId] || new Set();
+      photos.forEach(p => { if (sel.has(p.name)) kept.add(p.name); });
+      return { ...prev, [tabId]: kept };
+    });
 
   } catch (e) {
-    console.log("Failed to refresh folder:", e);
-    setAlertTitle("Error");
-    setAlertMessage("Unable to refresh — folder permission lost.\nSelect the folder again.");
+    console.log("refreshFolder error:", e);
   }
 }
 
