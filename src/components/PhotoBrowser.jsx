@@ -816,9 +816,16 @@ function closeTab(tabId) {
   // Render
   // ---------------------------
   const activeTabObj = tabs.find(function (t) { return t.id === activeTab; }) || null;
-  const photos = activeTabObj
+  let photos = activeTabObj
   ? globalTabPhotos[activeTabObj.folderEntry.nativePath] || activeTabObj.photos || []
   : [];
+
+// Sort: unused first, used at the end
+photos = [...photos].sort((a, b) => {
+  if (a.used && !b.used) return 1;
+  if (!a.used && b.used) return -1;
+  return a.name.localeCompare(b.name); // alphabetical inside groups
+});
 
   return (
     <div className="photo-browser">
