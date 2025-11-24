@@ -4,6 +4,10 @@
 // - Mark placed photos as used (badge)
 // - UXP-compatible (no optional chaining)
 
+// Global caches (must be OUTSIDE the component)
+const globalThumbnailCache = {};
+const globalTabPhotos = {};
+
 import React, { useState, useEffect } from "react";
 import "./PhotoBrowser.css";
 
@@ -18,6 +22,9 @@ export default function PhotoBrowser() {
   // Tabs state
   const [tabs, setTabs] = useState([]); // {id, name, folderEntry, photos: [{file,url,name,used}]}
   const [activeTab, setActiveTab] = useState(null);
+  const [stats, setStats] = useState({ totalThumbs: 0, selectedCount: 0, mb: "0.00" });
+  const [thumbnailsOnly, setThumbnailsOnly] = useState(true);
+  const [folderCounts, setFolderCounts] = useState({});
 
   // Selection per tab: { tabId: Set([photoName, ...]) }
   const [tabSelections, setTabSelections] = useState({});
@@ -46,21 +53,45 @@ export default function PhotoBrowser() {
   // ---------------------------
   // Helpers: load images from folder
   // ---------------------------
-  async function loadImagesFromFolder(folder) {
-    const entries = await folder.getEntries();
-    const imageFiles = entries.filter((e) => e.isFile && imageExtRE.test(e.name));
+  async function loadImagesFromFolder(folderEntry) {
+  const entries = await folderEntry.getEntries();
+  const imageEntries = entries.filter(e => /\.(jpg|jpeg|png)$/i.test(e.name));
 
-    const items = await Promise.all(
-      imageFiles.map(async (file) => {
-        const arrayBuffer = await file.read({ format: storage.formats.binary });
-        const mime = /\.png$/i.test(file.name) ? "image/png" : "image/jpeg";
-        const blob = new Blob([arrayBuffer], { type: mime });
-        const url = URL.createObjectURL(blob);
-        return { file, url, name: file.name, used: false };
-      })
-    );
-    return items;
+  const photos = [];
+
+  for (let entry of imageEntries) {
+    const key = folderEntry.nativePath + "/" + entry.name;
+
+    // Reuse cached URL
+    if (globalThumbnailCache[key]) {
+      photos.push({
+        name: entry.name,
+        file: entry,
+        url: globalThumbnailCache[key],
+        used: false
+      });
+      continue;
+    }
+
+    // Otherwise read file once
+    const bin = await entry.read({ format: storage.formats.binary });
+    const blob = new Blob([bin], { type: "image/jpeg" });
+    const url = URL.createObjectURL(blob);
+
+    globalThumbnailCache[key] = url;
+
+    photos.push({
+      name: entry.name,
+      file: entry,
+      url,
+      used: false
+    });
   }
+
+  globalTabPhotos[folderEntry.nativePath] = photos;
+  return photos;
+} 
+
 
   // ---------------------------
   // Add tab from folder picker (+ button)
@@ -112,6 +143,19 @@ export default function PhotoBrowser() {
       return { ...prev, [tabId]: new Set() };
     });
   }
+
+  useEffect(() => {
+  if (!activeTab) return;
+
+  const tab = tabs.find(t => t.id === activeTab);
+  if (tab && tab.photos) {
+    setFolderCounts(prev => ({
+      ...prev,
+      [activeTab]: tab.photos.length
+    }));
+  }
+}, [activeTab]);
+
 
   // ---------------------------
   // Alert helpers
@@ -295,6 +339,15 @@ export default function PhotoBrowser() {
               })
             );
 
+            // ALSO update globalTabPhotos cache so UI reflects the used flag
+            const folderPath = activeTabObj.folderEntry.nativePath;
+              if (globalTabPhotos[folderPath]) {
+                globalTabPhotos[folderPath] = globalTabPhotos[folderPath].map(ph =>
+                ph.name === photo.name ? { ...ph, used: true } : ph
+                );
+              }
+
+
             // remove placed photo from that tab's selection set
             setTabSelections((prevSel) => {
               const newSel = { ...prevSel };
@@ -344,6 +397,81 @@ export default function PhotoBrowser() {
       console.log(e);
     }
   }
+
+  async function refreshTab(tabId) {
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab || !tab.folderEntry) return;
+
+  try {
+    // Build map of existing photos
+    const oldMap = {};
+    tab.photos.forEach(p => {
+      oldMap[p.name] = p;
+    });
+
+    // Pass map into loadImagesFromFolder
+    const photos = await loadImagesFromFolder(tab.folderEntry, oldMap);
+
+    setTabs(prev =>
+      prev.map(t =>
+        t.id === tabId ? { ...t, photos } : t
+      )
+    );
+
+    // Keep only selections that still exist
+    setTabSelections(prev => {
+      const newSet = new Set();
+      const sel = prev[tabId] || new Set();
+      photos.forEach(p => {
+        if (sel.has(p.name)) newSet.add(p.name);
+      });
+      return { ...prev, [tabId]: newSet };
+    });
+
+  } catch (e) {
+    console.log("Refresh error:", e);
+  }
+}
+
+  async function checkFolderChange(tabId) {
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab || !tab.folderEntry) return;
+
+  try {
+    const entries = await tab.folderEntry.getEntries();
+    const count = entries.filter(e => /\.(jpg|jpeg|png)$/i.test(e.name)).length;
+
+    const prevCount = folderCounts[tabId];
+
+    // First activation of this tab — set count, DO NOT trigger reload
+    if (prevCount === undefined) {
+      setFolderCounts(prev => ({ ...prev, [tabId]: count }));
+      return;
+    }
+
+    // Only refresh if true change detected
+    if (count !== prevCount) {
+      console.log("Change detected in tab:", tabId);
+
+      await refreshTab(tabId);
+
+      setFolderCounts(prev => ({ ...prev, [tabId]: count }));
+    }
+
+  } catch (err) {
+    console.log("Auto-refresh error:", err);
+  }
+}
+
+
+useEffect(() => {
+  const interval = setInterval(() => {
+    if (activeTab) checkFolderChange(activeTab);
+  }, 4000); // check every 4 seconds
+
+  return () => clearInterval(interval);
+}, [activeTab, tabs]);
+
 
   // ---------------------------
   // Inline styles for thumbs
@@ -441,6 +569,47 @@ export default function PhotoBrowser() {
       { commandName: "Double-click Place Photo" }
     );
 
+    //---------------------------------------------------------
+// AFTER placing the photo, mark as used (LOCAL + GLOBAL)
+//---------------------------------------------------------
+
+// 1. Mark as used inside the tabs state
+setTabs(prev =>
+  prev.map(t =>
+    t.id === activeTab
+      ? {
+          ...t,
+          photos: t.photos.map(ph =>
+            ph.name === photo.name ? { ...ph, used: true } : ph
+          )
+        }
+      : t
+  )
+);
+
+// 2. Mark as used inside the globalTabPhotos cache
+if (activeTabObj && activeTabObj.folderEntry) {
+  const folderPath = activeTabObj.folderEntry.nativePath;
+
+  if (globalTabPhotos[folderPath]) {
+    globalTabPhotos[folderPath] = globalTabPhotos[folderPath].map(ph =>
+      ph.name === photo.name ? { ...ph, used: true } : ph
+    );
+  }
+}
+
+// 3. Remove from selection set (optional but recommended)
+setTabSelections(prev => {
+  const copy = { ...prev };
+  const s = new Set(copy[activeTab] || []);
+  if (s.has(photo.name)) {
+    s.delete(photo.name);
+    copy[activeTab] = s;
+  }
+  return copy;
+});
+
+
   } catch (e) {
     setAlertTitle("Error");
     setAlertMessage(e.message || String(e));
@@ -448,10 +617,105 @@ export default function PhotoBrowser() {
 }
 
 
+async function getSelectedStats() {
+  if (!activeTabObj || !activeTabObj.photos) {
+    return { totalThumbs: 0, selectedCount: 0, mb: "0.00" };
+  }
+
+  const totalThumbs = activeTabObj.photos.length;
+  const sel = tabSelections[activeTab] || new Set();
+
+  let totalBytes = 0;
+
+  for (let i = 0; i < activeTabObj.photos.length; i++) {
+    const p = activeTabObj.photos[i];
+    if (sel.has(p.name)) {
+      totalBytes += await getFileSizeInBytes(p.file);
+    }
+  }
+
+  return {
+    totalThumbs: totalThumbs,
+    selectedCount: sel.size,
+    mb: (totalBytes / (1024 * 1024)).toFixed(2)
+  };
+}
+
+
+async function getFileSizeInBytes(fileEntry) {
+  try {
+    const ab = await fileEntry.read({ format: storage.formats.binary });
+    return ab.byteLength;
+  } catch (e) {
+    return 0;
+  }
+}
+
+useEffect(() => {
+  async function update() {
+    const s = await getSelectedStats();
+    setStats(s);
+  }
+  update();
+}, [activeTab, tabSelections]);
+
+
+
+async function refreshFolder(tabId) {
+  const tab = tabs.find(t => t.id === tabId);
+  if (!tab || !tab.folderEntry) {
+    console.log("No folderEntry for tab", tab);
+    return;
+  }
+
+  try {
+    const photos = await loadImagesFromFolder(tab.folderEntry);
+
+    setTabs(prev =>
+      prev.map(t => (t.id === tabId ? { ...t, photos } : t))
+    );
+
+    // Also reset selections for this tab
+    setTabSelections(prev => ({
+      ...prev,
+      [tabId]: new Set()
+    }));
+
+  } catch (e) {
+    console.log("Failed to refresh folder:", e);
+    setAlertTitle("Error");
+    setAlertMessage("Unable to refresh — folder permission lost.\nSelect the folder again.");
+  }
+}
+
+function closeTab(tabId) {
+  setTabs(function (prev) {
+    const remaining = prev.filter((t) => t.id !== tabId);
+
+    if (tabId === activeTab) {
+      if (remaining.length > 0) setActiveTab(remaining[0].id);
+      else setActiveTab(null);
+    }
+
+    return remaining;
+  });
+
+  setTabSelections(function (prev) {
+    const copy = { ...prev };
+    delete copy[tabId];
+    return copy;
+  });
+}
+
+
+
   // ---------------------------
   // Render
   // ---------------------------
   const activeTabObj = tabs.find(function (t) { return t.id === activeTab; }) || null;
+  const photos = activeTabObj
+  ? globalTabPhotos[activeTabObj.folderEntry.nativePath] || activeTabObj.photos || []
+  : [];
 
   return (
     <div className="photo-browser">
@@ -485,18 +749,33 @@ export default function PhotoBrowser() {
       {/* Tabs row */}
       <div className="tabs-row" role="tablist" aria-label="Folder tabs">
         {tabs.map(function (t) {
-          return (
-            <button
-              key={t.id}
-              className={"tab " + (t.id === activeTab ? "tab-active" : "")}
-              title={t.name}
-              onClick={function () { openTab(t.id); }}
-            >
-              <span className="tab-icon">📁</span>
-              <span className="tab-letter">{t.name ? t.name.charAt(0).toUpperCase() : "?"}</span>
-            </button>
-          );
-        })}
+  return (
+    <div
+      key={t.id}
+      className={"tab " + (t.id === activeTab ? "tab-active" : "")}
+      title={t.name}
+      onClick={function () { openTab(t.id); }}
+    >
+      <span className="tab-icon">📁</span>
+      <span className="tab-letter">
+        {t.name ? t.name.charAt(0).toUpperCase() : "?"}
+      </span>
+
+      {/* CLOSE BUTTON */}
+      <span
+        className="tab-close"
+        title="Close"
+        onClick={function (e) {
+          e.stopPropagation();
+          closeTab(t.id);
+        }}
+      >
+        ✕
+      </span>
+    </div>
+  );
+})}
+
 
         {/* Add tab button */}
         <button
@@ -530,9 +809,9 @@ export default function PhotoBrowser() {
 
       {/* Thumbnails */}
       <div className="thumbnails" aria-live="polite">
-        {activeTabObj && activeTabObj.photos && activeTabObj.photos.length > 0 ? (
-          activeTabObj.photos.map(function (item) {
-            // selection is per-tab
+        {photos.length > 0 ? (
+            photos.map(function (item) {
+            // selection is per-tab 
             const selSet = tabSelections[activeTab] || new Set();
             const isSelected = selSet.has(item.name);
             const usedClass = item.used ? " used" : "";
@@ -548,6 +827,9 @@ export default function PhotoBrowser() {
                 onDragStart={function (e) { handleDragStart(e, item); }}
               >
                 <img src={item.url} alt={item.name} style={getImageStyle()} />
+                {!thumbnailsOnly ? (
+                  <div className="thumb-label">{item.name}</div>
+                ) : null}
               </div>
             );
           })
@@ -556,10 +838,17 @@ export default function PhotoBrowser() {
         )}
       </div>
 
-      {/* Always-visible minimal slider centered at bottom */}
+      {/* BOTTOM BAR — Bridge Style */}
       {activeTabObj && activeTabObj.photos && activeTabObj.photos.length > 0 ? (
-      <div className="zoom-slider">
-      <button className="zoom-btn" onClick={() => setTileWidth(Math.max(tileWidth - 10, BRIDGE_MIN))}>−</button>
+  <div className="bottom-bar">
+    <div className="bottom-left">
+      <button
+        className="zoom-btn"
+        title="Decrease"
+        onClick={() => setTileWidth(w => Math.max(w - 10, BRIDGE_MIN))}
+      >
+        −
+      </button>
 
       <input
         className="zoom-range"
@@ -567,12 +856,44 @@ export default function PhotoBrowser() {
         min={BRIDGE_MIN}
         max={BRIDGE_MAX}
         value={tileWidth}
-        onChange={(e) => setTileWidth(parseInt(e.target.value))}
+        onChange={e => setTileWidth(parseInt(e.target.value))}
       />
 
-      <button className="zoom-btn" onClick={() => setTileWidth(Math.min(tileWidth + 10, BRIDGE_MAX))}>+</button>
+      <button
+        className="zoom-btn"
+        title="Increase"
+        onClick={() => setTileWidth(w => Math.min(w + 10, BRIDGE_MAX))}
+      >
+        +
+      </button>
+
+      <div className="bottom-stats">
+        {stats.totalThumbs} thumbnails, {stats.selectedCount} selected – {stats.mb} MB
+      </div>
+    </div>
+
+    <div className="bottom-right">
+      {/* REFRESH BUTTON */}
+      <button
+        className="refresh-btn"
+        title="Refresh"
+        onClick={() => refreshFolder(activeTab)}
+      >
+        🔄
+      </button>
+
+      <label className="thumbnails-label">
+        <input
+          type="checkbox"
+          checked={thumbnailsOnly}
+          onChange={(e) => setThumbnailsOnly(e.target.checked)}
+        />
+          Thumbnails Only
+      </label>
+    </div>
   </div>
 ) : null}
+
 
     </div>
   );
