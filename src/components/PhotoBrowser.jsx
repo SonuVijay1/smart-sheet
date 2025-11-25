@@ -1,10 +1,3 @@
-// PhotoBrowser.jsx — Final merged file
-// - Multi-tab persistent selection
-// - Global selection count in Place button
-// - Mark placed photos as used (badge)
-// - UXP-compatible (no optional chaining)
-
-// Global caches (must be OUTSIDE the component)
 const globalThumbnailCache = {};
 const globalTabPhotos = {};
 
@@ -22,9 +15,17 @@ export default function PhotoBrowser() {
   // Tabs state
   const [tabs, setTabs] = useState([]); // {id, name, folderEntry, photos: [{file,url,name,used}]}
   const [activeTab, setActiveTab] = useState(null);
+  const thumbRef = React.useRef(null);
   const [stats, setStats] = useState({ totalThumbs: 0, selectedCount: 0, mb: "0.00" });
   const [thumbnailsOnly, setThumbnailsOnly] = useState(true);
   const [folderCounts, setFolderCounts] = useState({});
+  const [showWebMenu, setShowWebMenu] = useState(false);
+  const [contextMenu, setContextMenu] = useState({
+  visible: false,
+  x: 0,
+  y: 0,
+  photo: null
+});
 
   // Selection per tab: { tabId: Set([photoName, ...]) }
   const [tabSelections, setTabSelections] = useState({});
@@ -316,6 +317,18 @@ export default function PhotoBrowser() {
             // scale & center
             await resizeAlTo(frame.bounds, "fill");
 
+            // ⭐ RASTERIZE BEFORE CLIPPING
+await batchPlay(
+  [
+    {
+      _obj: "rasterizeLayer",
+      _target: [{ _ref: "layer", _id: app.activeDocument.activeLayers[0].id }],
+      rasterize: { _enum: "rasterizeItem", _value: "layer" }
+    }
+  ],
+  { synchronousExecution: true }
+);
+
             // clip to frame (group)
             await batchPlay(
               [
@@ -330,7 +343,6 @@ export default function PhotoBrowser() {
             // get placed layerId
             const placedLayer = app.activeDocument.activeLayers[0];
             photo.layerId = placedLayer.id;
-
 
             // mark used for that photo in tabs
             setTabs((prevTabs) =>
@@ -647,6 +659,18 @@ useEffect(() => {
         // scale and center inside the frame
         await resizeAlTo(frame.bounds, "fill");
 
+// ⭐ RASTERIZE BEFORE CLIPPING
+await batchPlay(
+  [
+    {
+      _obj: "rasterizeLayer",
+      _target: [{ _ref: "layer", _id: app.activeDocument.activeLayers[0].id }],
+      rasterize: { _enum: "rasterizeItem", _value: "layer" }
+    }
+  ],
+  { synchronousExecution: true }
+);
+
         // clip
         await batchPlay(
           [
@@ -661,7 +685,6 @@ useEffect(() => {
         );
         const placedLayer = app.activeDocument.activeLayers[0];
         photo.layerId = placedLayer.id;
-
       },
       { commandName: "Double-click Place Photo" }
     );
@@ -827,8 +850,190 @@ photos = [...photos].sort((a, b) => {
   return a.name.localeCompare(b.name); // alphabetical inside groups
 });
 
+useEffect(() => {
+  function handleKey(e) {
+    if (!activeTab) return;
+    if (!photos || photos.length === 0) return;
+
+    const sel = tabSelections[activeTab] || new Set();
+    if (sel.size === 0) return;
+
+    const names = photos.map(p => p.name);
+    const selected = names.filter(n => sel.has(n));
+    const anchor = selected[selected.length - 1];
+    const idx = names.indexOf(anchor);
+    let newIndex = idx;
+
+    // ---------- GRID COLUMN CALCULATION ----------
+    let columns = 1;
+    if (thumbRef.current) {
+      const gridWidth = thumbRef.current.clientWidth;
+      columns = Math.max(1, Math.floor(gridWidth / tileWidth));
+    }
+
+    // =====================================================
+    // SHIFT + RIGHT  (toggle select forward)
+    // =====================================================
+    if (e.shiftKey && e.key === "ArrowRight") {
+      newIndex = idx + 1;
+      if (newIndex >= names.length) return;
+
+      const target = names[newIndex];
+      const newSet = new Set(sel);
+
+      // toggle
+      if (newSet.has(target)) newSet.delete(target);
+      else newSet.add(target);
+
+      setTabSelections(prev => ({
+        ...prev,
+        [activeTab]: newSet
+      }));
+      e.preventDefault();
+      return;
+    }
+
+    // =====================================================
+    // SHIFT + LEFT  (toggle deselect backward)
+    // =====================================================
+    if (e.shiftKey && e.key === "ArrowLeft") {
+      newIndex = idx - 1;
+      if (newIndex < 0) return;
+
+      const target = names[newIndex];
+      const newSet = new Set(sel);
+
+      // toggle
+      if (newSet.has(target)) newSet.delete(target);
+      else newSet.add(target);
+
+      setTabSelections(prev => ({
+        ...prev,
+        [activeTab]: newSet
+      }));
+      e.preventDefault();
+      return;
+    }
+
+
+    // =====================================================
+    // SHIFT + DOWN (toggle down one row)
+    // =====================================================
+    if (e.shiftKey && e.key === "ArrowDown") {
+      newIndex = idx + columns;
+      if (newIndex >= names.length) return;
+
+      const target = names[newIndex];
+      const newSet = new Set(sel);
+
+      // toggle
+      if (newSet.has(target)) newSet.delete(target);
+      else newSet.add(target);
+
+      setTabSelections(prev => ({
+        ...prev,
+        [activeTab]: newSet
+      }));
+      e.preventDefault();
+      return;
+    }
+
+    // =====================================================
+    // SHIFT + UP (toggle up one row)
+    // =====================================================
+    if (e.shiftKey && e.key === "ArrowUp") {
+      newIndex = idx - columns;
+      if (newIndex < 0) return;
+
+      const target = names[newIndex];
+      const newSet = new Set(sel);
+
+      // toggle
+      if (newSet.has(target)) newSet.delete(target);
+      else newSet.add(target);
+
+      setTabSelections(prev => ({
+        ...prev,
+        [activeTab]: newSet
+      }));
+      e.preventDefault();
+      return;
+    }
+
+
+    // =====================================================
+    // NORMAL ARROWS — UNC HANGED
+    // =====================================================
+    if (e.key === "ArrowRight") newIndex = idx + 1;
+    if (e.key === "ArrowLeft") newIndex = idx - 1;
+    if (e.key === "ArrowDown") newIndex = idx + columns;
+    if (e.key === "ArrowUp") newIndex = idx - columns;
+
+    if (newIndex < 0 || newIndex >= names.length) return;
+
+    const targetName = names[newIndex];
+    const newSet = new Set(sel);
+
+    // normal arrow: move selection, not toggle
+    newSet.clear();
+    newSet.add(targetName);
+
+    setTabSelections(prev => ({
+      ...prev,
+      [activeTab]: newSet
+    }));
+
+    e.preventDefault();
+  }
+
+  window.addEventListener("keydown", handleKey);
+  return () => window.removeEventListener("keydown", handleKey);
+}, [activeTab, photos, tabSelections]);
+
+
+function openWebBrowser() {
+  require("uxp").shell.openExternal("https://google.com");
+}
+
+function handleRightClick(e, photo) {
+  e.preventDefault();
+
+  setContextMenu({
+    visible: true,
+    x: e.clientX,
+    y: e.clientY,
+    photo
+  });
+}
+
+function closeContextMenu() {
+  setContextMenu({ visible: false, x: 0, y: 0, photo: null });
+}
+
+async function preview(photo) {
+  const nativePath = photo.file.nativePath;
+  require("uxp").shell.openPath(nativePath);
+  closeContextMenu();
+}
+
+function removePhoto(photo) {
+  setTabs(prev =>
+    prev.map(tab =>
+      tab.id === activeTab
+        ? { ...tab, photos: tab.photos.filter(p => p.name !== photo.name) }
+        : tab
+    )
+  );
+  closeContextMenu();
+}
+
+
   return (
-    <div className="photo-browser">
+    <div
+    className="photo-browser"
+    tabIndex={0}
+    onClick={(e) => { closeContextMenu(); e.currentTarget.focus(); }}
+  >
       {/* Alert */}
       {alertMessage ? (
         <div className="uxp-alert-backdrop" role="dialog">
@@ -918,7 +1123,7 @@ photos = [...photos].sort((a, b) => {
       </div>
 
       {/* Thumbnails */}
-      <div className="thumbnails" aria-live="polite">
+      <div className="thumbnails" aria-live="polite" ref={thumbRef}>
         {photos.length > 0 ? (
             photos.map(function (item) {
             // selection is per-tab 
@@ -933,6 +1138,7 @@ photos = [...photos].sort((a, b) => {
                 style={getThumbContainerStyle()}
                 onClick={function (e) { toggleSelectPhoto(activeTab, item.name, e); }}
                 onDoubleClick={() => handleDoubleClickPlace(item)}
+                onContextMenu={(e) => handleRightClick(e, item)}
                 draggable={true}
                 onDragStart={function (e) { handleDragStart(e, item); }}
               >
@@ -947,6 +1153,21 @@ photos = [...photos].sort((a, b) => {
           <div className="empty">No images. Use the + button to open a folder (max 5 tabs).</div>
         )}
       </div>
+
+      {contextMenu.visible && (
+  <div
+    className="context-menu"
+    style={{ top: contextMenu.y, left: contextMenu.x }}
+    onClick={(e) => e.stopPropagation()}
+  >
+    <div className="context-item" onClick={() => removePhoto(contextMenu.photo)}>
+      🗑 Delete
+    </div>
+    <div className="context-item" onClick={() => preview(contextMenu.photo)}>
+      📂 Preview
+    </div>
+  </div>
+)}
 
       {/* BOTTOM BAR — Bridge Style */}
       {activeTabObj && activeTabObj.photos && activeTabObj.photos.length > 0 ? (
@@ -983,24 +1204,38 @@ photos = [...photos].sort((a, b) => {
     </div>
 
     <div className="bottom-right">
-      {/* REFRESH BUTTON */}
-      <button
-        className="refresh-btn"
-        title="Refresh"
-        onClick={() => refreshFolder(activeTab)}
-      >
-        🔄
-      </button>
 
-      <label className="thumbnails-label">
-        <input
-          type="checkbox"
-          checked={thumbnailsOnly}
-          onChange={(e) => setThumbnailsOnly(e.target.checked)}
-        />
-          Thumbnails Only
-      </label>
-    </div>
+  {/* REFRESH BUTTON */}
+
+<button className="refresh-btn" onClick={() => refreshFolder(activeTab)} title="Refresh">
+  ↻
+</button>
+
+
+  {/* GLOBE BUTTON */}
+  {/* <div className="globe-menu-wrapper">
+    <button
+      className="globe-btn"
+      title="Browse Internet"
+      onClick={() => setShowWebMenu(prev => !prev)}
+    >
+      🌐
+    </button>
+    {showWebMenu && (
+      <div className="globe-menu">
+        <div className="globe-menu-item" onClick={() => { setBrowserUrl("https://google.com"); setShowBrowser(true); setShowWebMenu(false); }}>Open in Plugin</div>
+        <div className="globe-menu-item" onClick={() => { require("uxp").shell.openExternal("https://google.com"); setShowWebMenu(false); }}>Open in Default Browser</div>
+      </div>
+    )}
+  </div> */}
+
+  {/* THUMBNAILS ONLY */}
+  <label className="thumbnails-label">
+    <input type="checkbox" checked={thumbnailsOnly} onChange={(e) => setThumbnailsOnly(e.target.checked)} />
+    Thumbnails Only
+  </label>
+
+</div>
   </div>
 ) : null}
 
